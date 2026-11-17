@@ -205,7 +205,7 @@
       they cost ~zero compute to re-emit because the prefix was already
       seen by this slot.<br><br>
       <strong>Fresh</strong> tokens required a full forward pass.<br><br>
-      The grid below is the FP16 0.5B viz model's activations on the
+      The grid below is the FP16 viz twin's activations on the
       same text, projected to 32 PCA clusters per layer. Color is the
       delta from the previous token — bright means big change.
     </div>
@@ -391,7 +391,8 @@ function onVizStep(msg) {
   }
   state.viz.current = data;
   drawGrid(data, /* isDelta */ true);
-  $("viz-info").textContent = `${msg.shape[0]}L × ${msg.shape[2]}C, ${msg.elapsed_ms}ms`;
+  const k = msg.shape[2] ?? msg.shape[1];
+  $("viz-info").textContent = `${msg.shape[0]}L × ${k}C, ${msg.elapsed_ms}ms`;
   $("viz-status").textContent = "live";
 }
 
