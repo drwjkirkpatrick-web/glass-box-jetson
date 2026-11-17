@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Models and quantization outputs — too large for git, and reproducible
+models/
+*.gguf
+*.safetensors
+*.bin
+neuron_clusters.json
+
+# llama.cpp clone — platform-specific, build it from source
+llama.cpp/
+
+# Logs
+logs/
+*.log
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Build artifacts
+*.o
+*.so
+*.a
+build/
+_build/
+dist/
+
+# Local environment overrides
+.env
+.env.local

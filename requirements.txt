@@ -1,0 +1,27 @@
+# Glass Box Jetson — verified on Jetson Orin Nano Super 8GB, JetPack 6 / CUDA 12.6
+# Two environments by design:
+#   - the CONTROLLER runs on system python 3.10 (/usr/bin/python3.10)
+#   - the VIZ MODEL runs in a CUDA-torch venv, passed via --viz-python
+#     (e.g. ~/.venvs/jetson-pytorch; NVIDIA Jetson torch build, sm_87)
+# Upstream's requirements (JetPack 7.2 / torch 2.13 cp312 wheel) are preserved
+# in docs/ORIGINAL_README.md's repo history.
+
+# --- controller (system python 3.10) ---
+fastapi>=0.143
+uvicorn>=0.54
+websockets>=16.1
+httpx>=0.28
+psutil>=7.2
+
+# --- viz model (CUDA venv) ---
+# torch: NVIDIA Jetson build for sm_87 (e.g. torch-2.5.0a0+nv24.8); not on PyPI.
+transformers==5.14.1   # qwen3_5 arch support requires >= 5.14
+tokenizers>=0.22.2
+huggingface_hub>=1.24
+numpy>=1.26
+# Optional speedup for hybrid linear-attention layers (works without it —
+# transformers falls back to a pure-torch path):
+# pip install flash-linear-attention causal-conv1d
+# nvidia-ml-py (pynvml): intentionally omitted — NVML queries are NotSupported
+# on the Orin iGPU, so server.py falls back to gpu_mb=0. Use tegrastats /
+# jetson-stats for GPU metrics on this device.

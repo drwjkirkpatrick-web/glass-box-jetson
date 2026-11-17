@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Glass Box — transparent LLM on Jetson</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --fresh: #f97583;
+    --cached: #56d364;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    margin: 0;
+    padding: 0;
+    font-size: 14px;
+  }
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--panel);
+  }
+  header h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .mem-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    padding: 3px 8px;
+    background: #21262d;
+    border-radius: 4px;
+    color: var(--muted);
+  }
+  .mem-pill.warn { color: var(--warn); }
+  .mem-pill.bad { color: var(--fresh); }
+  main {
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    height: calc(100vh - 50px);
+  }
+  .sidebar {
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    overflow-y: auto;
+  }
+  .panel {
+    padding: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+       color: var(--muted); margin: 0 0 8px 0; font-weight: 600; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 4px; }
+  textarea, input[type="text"] {
+    width: 100%;
+    background: #0d1117;
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 8px;
+    font-family: inherit;
+    font-size: 13px;
+    resize: vertical;
+  }
+  button {
+    background: var(--accent);
+    color: #0d1117;
+    border: 0;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  button:hover { background: #79b8ff; }
+  button:disabled { background: #30363d; color: var(--muted); cursor: not-allowed; }
+  button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  button.secondary:hover { background: #21262d; }
+  .output {
+    flex: 1;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .output .tok { display: inline; }
+  .output .tok.fresh { color: var(--text); }
+  .output .tok.cached { color: var(--muted); border-bottom: 1px dotted var(--cached); }
+  .viz-wrap {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    overflow: auto;
+    position: relative;
+  }
+  canvas#grid { display: block; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .legend .swatch {
+    display: inline-block;
+    width: 12px; height: 12px;
+    margin-right: 4px;
+    vertical-align: middle;
+    border-radius: 2px;
+  }
+  .stats {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .stats .num { color: var(--text); font-weight: 600; }
+  .stats .num.cached { color: var(--cached); }
+  .stats .num.fresh { color: var(--fresh); }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    background: #21262d;
+    border-radius: 10px;
+    font-size: 11px;
+    color: var(--muted);
+    margin-right: 6px;
+  }
+  .pill.live { background: #1f6feb33; color: var(--accent); }
+  .controls-row { display: flex; gap: 8px; align-items: center; }
+  .controls-row button { margin-top: 0; }
+  .empty {
+    color: var(--muted);
+    text-align: center;
+    padding: 40px 20px;
+    font-style: italic;
+  }
+  .error { color: var(--fresh); font-size: 12px; margin-top: 6px; }
+  .info { color: var(--muted); font-size: 11px; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Glass Box <span class="sub" id="model-sub">— local LLM on Jetson Orin Nano Super</span></h1>
+  </div>
+  <div>
+    <span id="mem-pill" class="mem-pill">mem: ?</span>
+    <span id="conn-pill" class="pill">connecting…</span>
+  </div>
+</header>
+
+<main>
+  <aside class="sidebar">
+    <h2>1. Session prefix</h2>
+    <textarea id="prefix" rows="6">You are a concise assistant. Answer the user's question in 1-2 sentences.</textarea>
+    <div class="controls-row" style="margin-top:8px;">
+      <button id="new-session-btn">Start session</button>
+      <button id="end-session-btn" class="secondary" disabled>End</button>
+    </div>
+    <div id="session-info" class="info"></div>
+
+    <h2 style="margin-top:20px;">2. Send a message</h2>
+    <textarea id="message" rows="3" placeholder="Type a question…">What is the capital of France?</textarea>
+    <div class="controls-row" style="margin-top:8px;">
+      <button id="send-btn" disabled>Generate</button>
+      <label style="margin:0;display:flex;align-items:center;gap:4px;">
+        <input type="checkbox" id="viz-toggle" checked> Live viz
+      </label>
+    </div>
+    <div id="error" class="error"></div>
+
+    <h2 style="margin-top:20px;">How to read this</h2>
+    <div class="info" style="line-height:1.5;">
+      <strong>Cached</strong> tokens came from the session's KV cache —
+      they cost ~zero compute to re-emit because the prefix was already
+      seen by this slot.<br><br>
+      <strong>Fresh</strong> tokens required a full forward pass.<br><br>
+      The grid below is the FP16 0.5B viz model's activations on the
+      same text, projected to 32 PCA clusters per layer. Color is the
+      delta from the previous token — bright means big change.
+    </div>
+  </aside>
+
+  <section class="panel">
+    <div>
+      <h2>Output</h2>
+      <div id="output" class="output"><span class="empty">Start a session and send a message.</span></div>
+      <div class="stats">
+        <div>generated: <span class="num fresh" id="stat-fresh">0</span></div>
+        <div>cached: <span class="num cached" id="stat-cached">0</span></div>
+        <div>tok/s: <span class="num" id="stat-tps">–</span></div>
+        <div>latency: <span class="num" id="stat-lat">–</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;flex:1;display:flex;flex-direction:column;">
+      <h2>Layer activations <span id="viz-status" class="pill">idle</span></h2>
+      <div class="viz-wrap">
+        <canvas id="grid"></canvas>
+      </div>
+      <div class="legend">
+        <span><span class="swatch" style="background:#0d1117"></span>no change</span>
+        <span><span class="swatch" style="background:#56d364"></span>+Δ</span>
+        <span><span class="swatch" style="background:#f97583"></span>−Δ</span>
+        <span>rows = layer (top = 0), cols = PCA cluster</span>
+        <span style="margin-left:auto" id="viz-info"></span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ---------- State ----------
+const state = {
+  sessionId: null,
+  ws: null,
+  viz: {
+    canvas: null,
+    ctx: null,
+    numLayers: 24,
+    numClusters: 32,
+    // Per-layer, per-cluster rolling "previous" activation for delta calc
+    prev: null,    // Float32Array [L*K]
+    current: null, // Float32Array [L*K]
+    cellW: 12,
+    cellH: 12,
+    labelW: 50,
+    labelH: 18,
+    tokenMarker: null, // {layerIdx, ...} — which cell is the "live" token
+  },
+  output: { fresh: 0, cached: 0 },
+};
+
+// ---------- DOM ----------
+const $ = id => document.getElementById(id);
+
+// ---------- WebSocket to controller ----------
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  state.ws = new WebSocket(`${proto}://${location.host}/ws/dashboard`);
+  state.ws.onopen = () => {
+    $("conn-pill").textContent = "live";
+    $("conn-pill").classList.add("live");
+  };
+  state.ws.onclose = () => {
+    $("conn-pill").textContent = "disconnected";
+    $("conn-pill").classList.remove("live");
+    setTimeout(connectWS, 1500);
+  };
+  state.ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleServerMsg(msg);
+  };
+}
+
+function handleServerMsg(msg) {
+  if (msg.kind === "hello") updateMem(msg.memory);
+  else if (msg.kind === "token") onToken(msg);
+  else if (msg.kind === "prefill_done") onVizPrefill(msg);
+  else if (msg.kind === "step_done") onVizStep(msg);
+  else if (msg.kind === "generate_done") onGenerateDone(msg);
+}
+
+function updateMem(mem) {
+  const pct = (mem.rss_mb / mem.total_mb * 100).toFixed(0);
+  const gpu = mem.gpu_mb ? `, GPU ${mem.gpu_mb.toFixed(0)}MB` : "";
+  const pill = $("mem-pill");
+  pill.textContent = `mem: ${mem.rss_mb.toFixed(0)}MB / ${mem.total_mb.toFixed(0)}MB (${pct}%)${gpu}`;
+  pill.classList.toggle("warn", parseFloat(pct) > 60);
+  pill.classList.toggle("bad", parseFloat(pct) > 80);
+}
+
+function onToken(msg) {
+  const out = $("output");
+  if (out.querySelector(".empty")) out.innerHTML = "";
+  const span = document.createElement("span");
+  span.className = "tok fresh";
+  span.textContent = msg.token;
+  out.appendChild(span);
+  state.output.fresh += 1;
+  $("stat-fresh").textContent = state.output.fresh;
+  out.scrollTop = out.scrollHeight;
+
+  // Ask viz model for activation delta for this new token
+  if ($("viz-toggle").checked) {
+    requestVizStep(/* token id not known; server doesn't expose it */ null);
+  }
+}
+
+function onGenerateDone(msg) {
+  state.output.cached = msg.n_cached_total;
+  $("stat-cached").textContent = state.output.cached;
+  $("stat-tps").textContent = msg.tokens_per_s.toFixed(2);
+  $("stat-lat").textContent = (msg.elapsed_s * 1000).toFixed(0) + "ms";
+  updateMem(msg.memory);
+  $("send-btn").disabled = false;
+  $("viz-status").textContent = "idle";
+  // Mark cached tokens visually (prefix portion)
+  markCachedPrefix(msg);
+}
+
+function markCachedPrefix(msg) {
+  // Server tells us n_cached_total = tokens from KV cache on this call
+  // (= full prompt tokens). We mark the prefix in the output panel by
+  // tagging an info banner — text is already generated, so we annotate
+  // above the output.
+  const banner = document.createElement("div");
+  banner.style.cssText = "font-size:11px;color:var(--cached);margin-bottom:6px;font-family:ui-monospace,monospace;";
+  banner.textContent = `↻ ${msg.n_cached_total} prompt tokens served from KV cache · ${msg.n_generated} freshly generated`;
+  $("output").prepend(banner);
+}
+
+// ---------- Viz model (separate WS) ----------
+let vizWs = null;
+let vizWsUrl = null;
+async function connectVizWs() {
+  if (!vizWsUrl) {
+    // The controller runs on a different port than the viz model —
+    // ask the controller for the right URL (Bug 2 fix).
+    try {
+      const r = await fetch("/config");
+      const cfg = await r.json();
+      vizWsUrl = cfg.viz_ws_url;
+      const ms = document.getElementById("model-sub");
+      if (ms && cfg.served_model) ms.textContent = "— " + cfg.served_model + " on Jetson Orin Nano Super";
+    } catch (e) {
+      console.error("[viz] could not fetch /config:", e);
+      setTimeout(connectVizWs, 2000);
+      return;
+    }
+  }
+  vizWs = new WebSocket(vizWsUrl);
+  vizWs.onopen = () => console.log("[viz] connected to", vizWsUrl);
+  vizWs.onclose = () => { vizWs = null; setTimeout(connectVizWs, 1000); };
+  vizWs.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.kind === "prefill_done") onVizPrefill(msg);
+    else if (msg.kind === "step_done") onVizStep(msg);
+  };
+}
+
+function onVizPrefill(msg) {
+  // shape: [num_layers, num_tokens, num_clusters]
+  state.viz.numLayers = msg.shape[0];
+  state.viz.numClusters = msg.shape[2];
+  initVizCanvas();
+  // We only draw a "delta from first token" version, since prefill is one big pass.
+  const data = new Float32Array(msg.clusters);
+  state.viz.prev = data.slice(); // baseline
+  state.viz.current = data.slice();
+  drawGrid(data, /* isDelta */ false);
+  $("viz-status").textContent = "live";
+}
+
+function onVizStep(msg) {
+  const data = new Float32Array(msg.clusters);
+  if (state.viz.prev) {
+    state.viz.prev = state.viz.current;
+  } else {
+    state.viz.prev = data.slice();
+  }
+  state.viz.current = data;
+  drawGrid(data, /* isDelta */ true);
+  $("viz-info").textContent = `${msg.shape[0]}L × ${msg.shape[2]}C, ${msg.elapsed_ms}ms`;
+  $("viz-status").textContent = "live";
+}
+
+function requestVizPrefill(text) {
+  if (!vizWs || vizWs.readyState !== 1) return;
+  vizWs.send(JSON.stringify({ kind: "prefill", prompt: text }));
+}
+
+function requestVizStep(tokenId) {
+  if (!vizWs || vizWs.readyState !== 1) return;
+  vizWs.send(JSON.stringify({ kind: "step", token_id: tokenId || 0 }));
+}
+
+// ---------- Canvas drawing ----------
+function initVizCanvas() {
+  const { numLayers, numClusters, cellW, cellH, labelW, labelH } = state.viz;
+  const W = labelW + numClusters * cellW;
+  const H = labelH + numLayers * cellH;
+  const canvas = $("grid");
+  canvas.width = W * window.devicePixelRatio;
+  canvas.height = H * window.devicePixelRatio;
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  state.viz.canvas = canvas;
+  state.viz.ctx = canvas.getContext("2d");
+  state.viz.ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+  // Background
+  state.viz.ctx.fillStyle = "#0d1117";
+  state.viz.ctx.fillRect(0, 0, W, H);
+}
+
+function drawGrid(data, isDelta) {
+  const { ctx, numLayers, numClusters, cellW, cellH, labelW, labelH, prev, current } = state.viz;
+  const W = labelW + numClusters * cellW;
+  const H = labelH + numLayers * cellH;
+  if (!ctx) initVizCanvas();
+
+  // Background
+  ctx.fillStyle = "#0d1117";
+  ctx.fillRect(0, 0, W, H);
+
+  // Compute display value: delta if isDelta else raw
+  // We'll do a per-layer scaling based on max-abs within that layer.
+  const layerMax = new Float32Array(numLayers);
+  if (isDelta && prev) {
+    for (let li = 0; li < numLayers; li++) {
+      let m = 0;
+      for (let ci = 0; ci < numClusters; ci++) {
+        const d = (current[li*numClusters+ci] - prev[li*numClusters+ci]);
+        m = Math.max(m, Math.abs(d));
+      }
+      layerMax[li] = m || 1.0;
+    }
+  } else {
+    for (let li = 0; li < numLayers; li++) {
+      let m = 0;
+      for (let ci = 0; ci < numClusters; ci++) {
+        m = Math.max(m, Math.abs(data[li*numClusters+ci]));
+      }
+      layerMax[li] = m || 1.0;
+    }
+  }
+
+  // Cells
+  for (let li = 0; li < numLayers; li++) {
+    for (let ci = 0; ci < numClusters; ci++) {
+      let v;
+      if (isDelta && prev) {
+        v = (data[li*numClusters+ci] - prev[li*numClusters+ci]) / layerMax[li];
+      } else {
+        v = data[li*numClusters+ci] / layerMax[li];
+      }
+      const [r, g, b] = valueToRGB(isDelta ? v : Math.abs(v));
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      const x = labelW + ci * cellW;
+      const y = labelH + li * cellH;
+      ctx.fillRect(x, y, cellW - 1, cellH - 1);
+    }
+  }
+
+  // Layer labels (every 4)
+  ctx.fillStyle = "#8b949e";
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.textBaseline = "middle";
+  for (let li = 0; li < numLayers; li += 4) {
+    const y = labelH + li * cellH + cellH/2;
+    ctx.fillText(`L${li}`, 2, y);
+  }
+  // Top label
+  ctx.fillStyle = "#58a6ff";
+  ctx.fillText(`clusters →`, 2, 8);
+}
+
+function valueToRGB(v) {
+  // v in [-1, 1]. Map: positive -> green (cached-stable), negative -> red (fresh-change)
+  // Actually: positive delta = activation grew, negative = shrank
+  if (v >= 0) {
+    const t = Math.min(1, v);
+    return [Math.round(86 * t), Math.round(211 * t), Math.round(100 * t)];
+  } else {
+    const t = Math.min(1, -v);
+    return [Math.round(249 * t), Math.round(117 * t), Math.round(131 * t)];
+  }
+}
+
+// ---------- API calls ----------
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    method: opts.method || "POST",
+    headers: { "Content-Type": "application/json" },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `${r.status}`);
+  return j;
+}
+
+async function startSession() {
+  setError(null);
+  $("new-session-btn").disabled = true;
+  try {
+    const r = await api("/session", { body: { prefix: $("prefix").value } });
+    state.sessionId = r.session_id;
+    $("session-info").textContent = `session ${r.session_id} · slot ${r.slot_id} · ${r.prefix_tokens} prefix tokens · ${r.cached_after_seed} cached`;
+    $("end-session-btn").disabled = false;
+    $("send-btn").disabled = false;
+    // Warm the viz model with the prefix
+    if ($("viz-toggle").checked) requestVizPrefill($("prefix").value);
+    $("output").innerHTML = "";
+    state.output = { fresh: 0, cached: 0 };
+    $("stat-fresh").textContent = "0";
+    $("stat-cached").textContent = "0";
+  } catch (e) {
+    setError("Could not start session: " + e.message);
+    $("new-session-btn").disabled = false;
+  }
+}
+
+async function endSession() {
+  if (!state.sessionId) return;
+  await api(`/session/${state.sessionId}`, { method: "DELETE" });
+  state.sessionId = null;
+  $("session-info").textContent = "";
+  $("new-session-btn").disabled = false;
+  $("end-session-btn").disabled = true;
+  $("send-btn").disabled = true;
+}
+
+async function sendMessage() {
+  if (!state.sessionId) return;
+  setError(null);
+  $("send-btn").disabled = true;
+  const msg = $("message").value;
+  // Push the new user-message text into the viz too, so the grid
+  // shifts based on the new input the INT4 model is about to see.
+  if ($("viz-toggle").checked) requestVizPrefill($("prefix").value + "\n\n" + msg);
+  try {
+    await api("/generate", { body: { session_id: state.sessionId, message: msg } });
+  } catch (e) {
+    setError("Generate failed: " + e.message);
+    $("send-btn").disabled = false;
+  }
+}
+
+function setError(s) { $("error").textContent = s || ""; }
+
+// ---------- Bindings ----------
+$("new-session-btn").onclick = startSession;
+$("end-session-btn").onclick = endSession;
+$("send-btn").onclick = sendMessage;
+$("message").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendMessage();
+});
+
+// ---------- Boot ----------
+initVizCanvas();
+drawGrid(new Float32Array(state.viz.numLayers * state.viz.numClusters), false);
+connectWS();
+connectVizWs();
+
+// Poll health for memory display
+setInterval(async () => {
+  try {
+    const r = await fetch("/health");
+    const j = await r.json();
+    updateMem(j.memory);
+  } catch {}
+}, 3000);
+</script>
+
+</body>
+</html>
